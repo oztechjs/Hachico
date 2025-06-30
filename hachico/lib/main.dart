@@ -40,6 +40,7 @@ class _ChatScreenState extends State<ChatScreen>
 
   final TextEditingController _controller = TextEditingController();
   bool _isLoading = false;
+  Set<String> _respondingCharacters = {}; // 返答中のキャラクターを追跡
 
   // チャット履歴
   List<ChatMessage> _groupMessages = [];
@@ -116,6 +117,7 @@ class _ChatScreenState extends State<ChatScreen>
         );
       }
       _isLoading = true;
+      _respondingCharacters.clear(); // 返答中のキャラクターをリセット
     });
     _controller.clear();
     try {
@@ -131,6 +133,7 @@ class _ChatScreenState extends State<ChatScreen>
     } finally {
       setState(() {
         _isLoading = false;
+        _respondingCharacters.clear(); // エラー時もリセット
       });
     }
   }
@@ -140,57 +143,99 @@ class _ChatScreenState extends State<ChatScreen>
     allCharacters.shuffle();
     final numResponders = 2 + Random().nextInt(2); // 2〜3人
     final selected = allCharacters.take(numResponders).toList();
+
+    // 順次処理で各キャラクターが前のキャラクターの発言を反映
     for (int i = 0; i < selected.length; i++) {
       final character = selected[i];
-      setState(() {
-        _isLoading = true;
-      });
-      try {
-        final lengthPrompt = [
-          '短めに返答してください。必ず全体で30字以内で完結してください。',
-          '普通の長さで返答してください。必ず全体で50字以内で完結してください。',
-          '短めに返答してください。必ず全体で30字以内で完結してください。',
-          '普通の長さで返答してください。必ず全体で50字以内で完結してください。',
-          '短めに返答してください。必ず全体で30字以内で完結してください。',
-          '普通の長さで返答してください。必ず全体で50字以内で完結してください。',
-          '長めに詳しく返答してください。必ず全体で100字以内で完結してください。',
-        ][Random().nextInt(7)];
-        String userMessage = text + '\n' + lengthPrompt;
-        if (i == selected.length - 1) {
-          userMessage += '\n\nあなたの返答の最後に、ユーザーに自然な形で新たな質問を投げかけてください。';
-        }
-        final response = await ChatService.sendGroupMessage(
-          userMessage,
-          character,
-          _groupMessages,
-          userId: _userId,
-        );
-        setState(() {
-          _groupMessages.add(ChatMessage(sender: character, message: response));
-        });
-        _scrollToBottom();
-        await Future.delayed(Duration(milliseconds: 500));
-      } catch (e) {
-        print('$characterの返答でエラー: $e');
-      }
+      await _handleCharacterResponse(text, character, i, selected.length);
+
+      // 各キャラクターの返答間に少し間隔を設ける
+      await Future.delayed(Duration(milliseconds: 500));
     }
+
     setState(() {
       _isLoading = false;
     });
     _scrollToBottom();
   }
 
+  Future<void> _handleCharacterResponse(
+    String text,
+    String character,
+    int index,
+    int total,
+  ) async {
+    // 返答開始を記録
+    setState(() {
+      _respondingCharacters.add(character);
+    });
+
+    try {
+      final lengthPrompt = [
+        '短めに返答してください。必ず全体で20字以内で完結してください。',
+        '普通の長さで返答してください。必ず全体で35字以内で完結してください。',
+        '短めに返答してください。必ず全体で20字以内で完結してください。',
+        '普通の長さで返答してください。必ず全体で35字以内で完結してください。',
+        '短めに返答してください。必ず全体で20字以内で完結してください。',
+        '普通の長さで返答してください。必ず全体で35字以内で完結してください。',
+        '長めに詳しく返答してください。必ず全体で60字以内で完結してください。',
+      ][Random().nextInt(7)];
+
+      String userMessage = '';
+      // 直前の他キャラの発言を含める
+      if (index > 0) {
+        // 直前のキャラ
+        final prevChar = _groupMessages.isNotEmpty
+            ? _groupMessages.last.sender
+            : null;
+        final prevMsg = _groupMessages.isNotEmpty
+            ? _groupMessages.last.message
+            : null;
+        if (prevChar != null && prevMsg != null) {
+          userMessage += '直前の他キャラの発言: $prevChar: $prevMsg\n';
+          userMessage +=
+              'この発言に必ずリアクション（同意・反論・補足・質問返しなど）を入れてから、ユーザーの質問にも答えてください。\n';
+        }
+      }
+      userMessage += text + '\n' + lengthPrompt;
+      if (index == total - 1) {
+        userMessage += '\n\nあなたの返答の最後に、ユーザーに自然な形で新たな質問を投げかけてください。';
+      }
+
+      final response = await ChatService.sendGroupMessage(
+        userMessage,
+        character,
+        _groupMessages,
+        userId: _userId,
+      );
+
+      setState(() {
+        _groupMessages.add(ChatMessage(sender: character, message: response));
+        _respondingCharacters.remove(character); // 返答完了
+      });
+      _scrollToBottom();
+
+      // 各キャラクターの返答間に少し間隔を設ける
+      await Future.delayed(Duration(milliseconds: 300));
+    } catch (e) {
+      print('$characterの返答でエラー: $e');
+      setState(() {
+        _respondingCharacters.remove(character); // エラー時も返答完了として記録
+      });
+    }
+  }
+
   Future<void> _handlePrivateChat(String text, String character) async {
     _privateMessages[character] ??= [];
     try {
       final lengthPrompt = [
-        '短めに返答してください。必ず全体で30字以内で完結してください。',
-        '普通の長さで返答してください。必ず全体で50字以内で完結してください。',
-        '短めに返答してください。必ず全体で30字以内で完結してください。',
-        '普通の長さで返答してください。必ず全体で50字以内で完結してください。',
-        '短めに返答してください。必ず全体で30字以内で完結してください。',
-        '普通の長さで返答してください。必ず全体で50字以内で完結してください。',
-        '長めに詳しく返答してください。必ず全体で100字以内で完結してください。',
+        '短めに返答してください。必ず全体で20字以内で完結してください。',
+        '普通の長さで返答してください。必ず全体で35字以内で完結してください。',
+        '短めに返答してください。必ず全体で20字以内で完結してください。',
+        '普通の長さで返答してください。必ず全体で35字以内で完結してください。',
+        '短めに返答してください。必ず全体で20字以内で完結してください。',
+        '普通の長さで返答してください。必ず全体で35字以内で完結してください。',
+        '長めに詳しく返答してください。必ず全体で60字以内で完結してください。',
       ][Random().nextInt(7)];
       final userMessage = text + '\n' + lengthPrompt;
       final response = await ChatService.sendMessage(
@@ -287,92 +332,6 @@ class _ChatScreenState extends State<ChatScreen>
       reverse: false,
       itemCount: messages.length,
       itemBuilder: (context, index) => _buildMessage(messages[index]),
-    );
-  }
-
-  Widget _buildUsageInfo() {
-    if (_userInfo == null) return SizedBox.shrink();
-    final dailyCount = _userInfo!['dailyCount'] ?? 0;
-    final dailyLimit = _userInfo!['dailyLimit'] ?? 30;
-    final isPremium = _userInfo!['isPremium'] ?? false;
-    final remaining = dailyLimit - dailyCount;
-    final totalUsage = _userInfo!['totalUsage'] ?? 0;
-    Color statusColor;
-    IconData statusIcon;
-    if (remaining <= 0) {
-      statusColor = Colors.red;
-      statusIcon = Icons.block;
-    } else if (remaining <= 5) {
-      statusColor = Colors.orange;
-      statusIcon = Icons.warning;
-    } else if (remaining <= 10) {
-      statusColor = Colors.yellow.shade700;
-      statusIcon = Icons.info;
-    } else {
-      statusColor = isPremium ? Colors.amber : Colors.green;
-      statusIcon = isPremium ? Icons.star : Icons.check_circle;
-    }
-    return Container(
-      padding: EdgeInsets.all(12),
-      color: statusColor.withOpacity(0.1),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(statusIcon, size: 18, color: statusColor),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  isPremium ? 'プレミアムプラン' : '無料プラン',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: statusColor,
-                  ),
-                ),
-              ),
-              if (!isPremium && remaining <= 5)
-                TextButton(
-                  onPressed: _showUpgradeDialog,
-                  child: Text(
-                    'アップグレード',
-                    style: TextStyle(fontSize: 12, color: Colors.blue),
-                  ),
-                ),
-            ],
-          ),
-          SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '今日の利用回数: $dailyCount/$dailyLimit (残り$remaining回)',
-                  style: TextStyle(fontSize: 13),
-                ),
-              ),
-              Text(
-                '総利用回数: $totalUsage回',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-              ),
-            ],
-          ),
-          if (remaining <= 5 && remaining > 0)
-            Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Text(
-                remaining <= 3
-                    ? '⚠️ 残り回数が少なくなっています。プレミアムプランへのアップグレードをご検討ください。'
-                    : '残り回数が少なくなっています。',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.orange[700],
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
 
@@ -493,11 +452,142 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
+  void _showFreePlanDetails() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.info, color: Colors.blue, size: 28),
+            SizedBox(width: 8),
+            Text('無料プラン詳細'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('現在の利用状況：', style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 12),
+            _buildDetailItem(Icons.calendar_today, '1日あたり30回まで利用可能'),
+            _buildDetailItem(Icons.refresh, '毎日午前0時にリセット'),
+            _buildDetailItem(Icons.check_circle, '基本的な機能は全て利用可能'),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.star, color: Colors.amber, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'プレミアムプランにアップグレードすると：',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 8),
+                  _buildFeatureItem(
+                    Icons.all_inclusive,
+                    '1日あたり150回まで利用可能（無料の5倍）',
+                  ),
+                  _buildFeatureItem(Icons.priority_high, '優先サポート'),
+                  _buildFeatureItem(Icons.new_releases, '新機能の先行利用'),
+                  _buildFeatureItem(Icons.speed, '高速レスポンス'),
+                  _buildFeatureItem(Icons.psychology, 'より詳細な回答'),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('閉じる'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _showUpgradeDialog();
+            },
+            icon: Icon(Icons.star),
+            label: Text('アップグレード'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailItem(IconData icon, String text) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: Colors.blue),
+          SizedBox(width: 8),
+          Expanded(child: Text(text, style: TextStyle(fontSize: 14))),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Hachico Chat'),
+        title: Row(
+          children: [
+            Text('Hachico Chat'),
+            if (_userInfo != null && !(_userInfo!['isPremium'] ?? false)) ...[
+              SizedBox(width: 8),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade100,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.shade300),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '無料版',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue.shade700,
+                      ),
+                    ),
+                    SizedBox(width: 4),
+                    GestureDetector(
+                      onTap: _showFreePlanDetails,
+                      child: Icon(
+                        Icons.info_outline,
+                        size: 14,
+                        color: Colors.blue.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
@@ -519,6 +609,18 @@ class _ChatScreenState extends State<ChatScreen>
           }).toList(),
         ),
         actions: [
+          if (_userInfo != null && !(_userInfo!['isPremium'] ?? false))
+            TextButton(
+              onPressed: _showUpgradeDialog,
+              child: Text(
+                'アップグレード',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.amber.shade700,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
           IconButton(
             icon: Icon(Icons.settings),
             onPressed: () {
@@ -532,14 +634,46 @@ class _ChatScreenState extends State<ChatScreen>
       body: SafeArea(
         child: Column(
           children: [
-            _buildUsageInfo(),
             Expanded(child: _buildMessageList()),
-            if (_isLoading)
+            if (_isLoading || _respondingCharacters.isNotEmpty)
               Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  'AIが送信中…',
-                  style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+                child: Column(
+                  children: [
+                    if (_respondingCharacters.isNotEmpty)
+                      ..._respondingCharacters
+                          .map(
+                            (character) => Padding(
+                              padding: EdgeInsets.symmetric(vertical: 2),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  if (characterAvatars.containsKey(character))
+                                    CircleAvatar(
+                                      backgroundImage: AssetImage(
+                                        characterAvatars[character]!,
+                                      ),
+                                      radius: 12,
+                                    ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    '$characterが返答中…',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey[700],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    if (_isLoading && _respondingCharacters.isEmpty)
+                      Text(
+                        'AIが送信中…',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+                      ),
+                  ],
                 ),
               ),
             Divider(height: 1),
