@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
+import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_service.dart';
 import 'hachico_api.dart';
 import 'settings_screen.dart';
@@ -49,6 +51,7 @@ class _ChatScreenState extends State<ChatScreen>
   // ユーザー管理
   late String _userId;
   Map<String, dynamic>? _userInfo;
+  File? _userIconFile; // ユーザーアイコンファイル
 
   final Map<String, Color> characterColors = {
     '魔女': Colors.purple,
@@ -74,12 +77,27 @@ class _ChatScreenState extends State<ChatScreen>
     super.initState();
     _tabController = TabController(length: _chatTabs.length, vsync: this);
     _initializeUser();
+    _loadUserIcon();
   }
 
   void _initializeUser() {
     final random = Random();
     _userId = 'user_${random.nextInt(1000000)}';
     _loadUserInfo();
+  }
+
+  Future<void> _loadUserIcon() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final path = prefs.getString('user_icon_path');
+      if (path != null && File(path).existsSync()) {
+        setState(() {
+          _userIconFile = File(path);
+        });
+      }
+    } catch (e) {
+      print('Failed to load user icon: $e');
+    }
   }
 
   Future<void> _loadUserInfo() async {
@@ -269,7 +287,13 @@ class _ChatScreenState extends State<ChatScreen>
     final textColor = isUser ? Colors.white : Colors.black87;
     final normalizedSender = normalizeCharacterName(msg.sender);
     final avatar = isUser
-        ? CircleAvatar(child: Text('君'))
+        ? CircleAvatar(
+            backgroundImage: _userIconFile != null
+                ? FileImage(_userIconFile!)
+                : null,
+            child: _userIconFile == null ? Text('君') : null,
+            radius: 20,
+          )
         : (characterAvatars.containsKey(normalizedSender)
               ? CircleAvatar(
                   backgroundImage: AssetImage(
@@ -546,91 +570,127 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Text('Hachico Chat'),
-            if (_userInfo != null && !(_userInfo!['isPremium'] ?? false)) ...[
-              SizedBox(width: 8),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade100,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.blue.shade300),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '無料版',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue.shade700,
-                      ),
-                    ),
-                    SizedBox(width: 4),
-                    GestureDetector(
-                      onTap: _showFreePlanDetails,
-                      child: Icon(
-                        Icons.info_outline,
-                        size: 14,
-                        color: Colors.blue.shade700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: _chatTabs.map((tab) {
-            final isGroup = tab == 'Hachico';
-            return Tab(
-              child: Row(
-                children: [
-                  if (!isGroup && characterAvatars[tab] != null)
-                    CircleAvatar(
-                      backgroundImage: AssetImage(characterAvatars[tab]!),
-                      radius: 12,
-                    ),
-                  if (!isGroup) SizedBox(width: 4),
-                  Text(tab),
-                ],
-              ),
-            );
-          }).toList(),
-        ),
-        actions: [
-          if (_userInfo != null && !(_userInfo!['isPremium'] ?? false))
-            TextButton(
-              onPressed: _showUpgradeDialog,
-              child: Text(
-                'アップグレード',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.amber.shade700,
-                  fontWeight: FontWeight.bold,
-                ),
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      title: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: _userInfo?['isPremium'] == true
+                  ? Colors.amber
+                  : Colors.grey.shade400,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              _userInfo?['isPremium'] == true ? 'プレミアム' : '無料版',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
               ),
             ),
+          ),
+          SizedBox(width: 8),
+          Text('Hachico Chat'),
+        ],
+      ),
+      backgroundColor: Colors.blue,
+      foregroundColor: Colors.white,
+      actions: [
+        if (_userInfo?['isPremium'] == true)
           IconButton(
-            icon: Icon(Icons.settings),
-            onPressed: () {
-              Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (context) => SettingsScreen()));
-            },
+            icon: Icon(Icons.info_outline),
+            onPressed: _showPremiumDetails,
+          )
+        else
+          IconButton(
+            icon: Icon(Icons.info_outline),
+            onPressed: _showFreePlanDetails,
+          ),
+        if (_userInfo?['isPremium'] != true)
+          IconButton(icon: Icon(Icons.star), onPressed: _showUpgradeDialog),
+        IconButton(
+          icon: Icon(Icons.settings),
+          onPressed: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => SettingsScreen()),
+            );
+            // 設定画面から戻ってきた時にユーザーアイコンを再読み込み
+            _loadUserIcon();
+          },
+        ),
+      ],
+      bottom: TabBar(
+        controller: _tabController,
+        isScrollable: true,
+        tabs: _chatTabs.map((tab) => Tab(text: tab)).toList(),
+      ),
+    );
+  }
+
+  void _showPremiumDetails() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.star, color: Colors.amber, size: 28),
+            SizedBox(width: 8),
+            Text('プレミアムプラン'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('プレミアムプランの特典：', style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 12),
+            _buildFeatureItem(Icons.all_inclusive, '1日あたり150回まで利用可能'),
+            _buildFeatureItem(Icons.priority_high, '優先サポート'),
+            _buildFeatureItem(Icons.new_releases, '新機能の先行利用'),
+            _buildFeatureItem(Icons.speed, '高速レスポンス'),
+            _buildFeatureItem(Icons.psychology, 'より詳細な回答'),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.green),
+                  SizedBox(width: 8),
+                  Text(
+                    'プレミアムプラン利用中',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Colors.green.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('閉じる'),
           ),
         ],
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _buildAppBar(),
       body: SafeArea(
         child: Column(
           children: [

@@ -1,7 +1,45 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'chat_service.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  File? _userIconFile;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserIcon();
+  }
+
+  Future<void> _loadUserIcon() async {
+    final prefs = await SharedPreferences.getInstance();
+    final path = prefs.getString('user_icon_path');
+    if (path != null && File(path).existsSync()) {
+      setState(() {
+        _userIconFile = File(path);
+      });
+    }
+  }
+
+  Future<void> _pickUserIcon() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_icon_path', picked.path);
+      setState(() {
+        _userIconFile = File(picked.path);
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -52,7 +90,19 @@ class SettingsScreen extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(Icons.chat_bubble_outline, size: 40, color: Colors.blue),
+          GestureDetector(
+            onTap: _pickUserIcon,
+            child: CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.blue.shade100,
+              backgroundImage: _userIconFile != null
+                  ? FileImage(_userIconFile!)
+                  : null,
+              child: _userIconFile == null
+                  ? Icon(Icons.person, size: 36, color: Colors.blue)
+                  : null,
+            ),
+          ),
           SizedBox(width: 16),
           Expanded(
             child: Column(
@@ -68,6 +118,11 @@ class SettingsScreen extends StatelessWidget {
                 Text(
                   'AIキャラクターと楽しく会話',
                   style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'アイコンをタップして変更',
+                  style: TextStyle(fontSize: 12, color: Colors.blueGrey),
                 ),
               ],
             ),
